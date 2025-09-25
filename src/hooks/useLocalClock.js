@@ -6,24 +6,33 @@ export function useLocalClock(tzOffsetSec = 0, { refreshMs = 1000, locale = 'vi-
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    let raf;
     let timer;
     const tick = () => setNow(Date.now());
-    // align to next second for cleaner display
     const ms = refreshMs <= 0 ? 1000 : refreshMs;
     const toNext = ms - (Date.now() % ms);
     timer = setTimeout(function loop() {
       tick();
       timer = setTimeout(loop, ms);
     }, toNext);
-    return () => { clearTimeout(timer); cancelAnimationFrame?.(raf); };
+    return () => { clearTimeout(timer); };
   }, [refreshMs]);
 
-  const date = useMemo(() => new Date(now + (timeZone ? 0 : (tzOffsetSec || 0)) * 1000), [now, tzOffsetSec, timeZone]);
   const time = useMemo(() => {
-    const opts = { hour: '2-digit', minute: '2-digit' };
-    if (timeZone) opts.timeZone = timeZone;
-    return date.toLocaleTimeString(locale, opts);
-  }, [date, locale, timeZone]);
-  return { date, time };
+    if (timeZone) {
+      return new Date(now).toLocaleTimeString(locale, {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone
+      });
+    }
+    const utcMs = now;
+    const localMs = utcMs + (tzOffsetSec || 0) * 1000;
+    return new Date(localMs).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC'
+    });
+  }, [now, tzOffsetSec, timeZone, locale]);
+
+  return { time };
 }

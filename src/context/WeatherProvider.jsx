@@ -3,18 +3,42 @@ import { useGeolocation } from '../hooks/useGeolocation';
 
 const WeatherContext = createContext(null);
 
-export function WeatherProvider({ children, defaultCity = 'Hanoi' }) {
-  const [city, setCity] = useState(defaultCity);
+export function WeatherProvider({ children, defaultCity = '' }) {
+  const [city, setCity] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('currentCity') || localStorage.getItem('lastCity');
+      return saved || defaultCity;
+    } catch {
+      return defaultCity;
+    }
+  });
   const [useGps, setUseGps] = useState(() => {
-    try { return localStorage.getItem('useGps') === '1'; } catch { return false; }
+    try {
+      const sessionGps = sessionStorage.getItem('useGps');
+      if (sessionGps !== null) return sessionGps === '1';
+      return localStorage.getItem('useGps') === '1';
+    } catch {
+      return false;
+    }
   });
   const [prevCity, setPrevCity] = useState(() => {
-    try { return localStorage.getItem('prevCity') || defaultCity; } catch { return defaultCity; }
+    try { return localStorage.getItem('prevCity') || 'Hanoi'; } catch { return 'Hanoi'; }
   });
   const { coords, permission, startWatch, stopWatch } = useGeolocation();
 
+  // Save to both session and local storage
   useEffect(() => {
-    try { localStorage.setItem('useGps', useGps ? '1' : '0'); } catch {}
+    try {
+      sessionStorage.setItem('currentCity', city);
+      if (city) localStorage.setItem('lastCity', city);
+    } catch {}
+  }, [city]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('useGps', useGps ? '1' : '0');
+      localStorage.setItem('useGps', useGps ? '1' : '0');
+    } catch {}
     if (useGps && permission !== 'denied') startWatch();
     if (!useGps) stopWatch();
   }, [useGps, permission, startWatch, stopWatch]);
@@ -22,10 +46,12 @@ export function WeatherProvider({ children, defaultCity = 'Hanoi' }) {
   // Remember last typed city when enabling GPS, and restore when disabling
   useEffect(() => {
     if (useGps) {
-      setPrevCity(city);
-      try { localStorage.setItem('prevCity', city); } catch {}
-    } else {
-      // restore previously selected city for convenience
+      if (city) {
+        setPrevCity(city);
+        try { localStorage.setItem('prevCity', city); } catch {}
+      }
+    } else if (!city) {
+      // Only restore if no city is set
       setCity(prevCity);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -24,8 +24,15 @@ async function http(path, params = {}, { signal } = {}) {
   const res = await fetch(url, { signal });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    const err = new Error(`Geo HTTP ${res.status}: ${res.statusText} ${text}`.trim());
+    let message = `Lỗi tra cứu vị trí (${res.status})`;
+    if (res.status === 401) {
+      message = 'API key không hợp lệ';
+    } else if (res.status === 404) {
+      message = 'Không tìm thấy thông tin vị trí';
+    }
+    const err = new Error(message);
     err.status = res.status;
+    err.detail = text;
     throw err;
   }
   return res.json();

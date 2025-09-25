@@ -3,12 +3,13 @@ import { weatherClient } from '../api/weatherClient';
 import { WEATHER_API } from '../config/env';
 import { getCache, setCache } from '../utils/cache';
 import { withRetry } from '../utils/retry';
+import { dedupe } from '../utils/dedupe';
 
 function buildKey(kind, params) {
   return `${kind}:${Object.entries(params).sort(([a],[b]) => a.localeCompare(b)).map(([k,v]) => `${k}=${v}`).join('&')}`;
 }
 
-export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast = false, cacheMs = 45_000 } = {}) {
+export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast = false, cacheMs = 4 * 60_000 } = {}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -30,11 +31,14 @@ export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast
     if (!WEATHER_API.apiKey) {
       throw new Error('Missing WEATHER_API_KEY. Set it in env.');
     }
-    // cache check (prefer coords cache if present, else city)
     const keyCoords = paramsCoords ? buildKey(forecast ? 'forecast' : 'current', paramsCoords) : null;
     const keyCity = paramsCity ? buildKey(forecast ? 'forecast' : 'current', paramsCity) : null;
-    const cached = (keyCoords && getCache(keyCoords)) || (keyCity && getCache(keyCity));
-    if (cached) { setData(cached); setLastUpdated(Date.now()); return; }
+    const cacheEntry = (keyCoords && getCache(keyCoords)) || (keyCity && getCache(keyCity));
+    if (cacheEntry?.data) {
+      setData(cacheEntry.data);
+      setLastUpdated(cacheEntry.timestamp || Date.now());
+      if (Date.now() - (cacheEntry.timestamp || 0) < cacheMs) return;
+    }
 
     // abort previous fetch
     if (ctrlRef.current) ctrlRef.current.abort();
@@ -52,15 +56,14 @@ export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast
       let result;
       if (paramsCoords) {
         try {
-          result = await withRetry(callCoords);
+          result = await dedupe(keyCoords || 'coords', () => withRetry(callCoords));
           setData(result);
           if (keyCoords) setCache(keyCoords, result, cacheMs);
           setLastUpdated(Date.now());
         } catch (e) {
           if (e.name === 'AbortError') return;
-          // Fallback: if 401 and we have city available, try city
           if (e.status === 401 && paramsCity) {
-            result = await withRetry(callCity);
+            result = await dedupe(keyCity || 'city', () => withRetry(callCity));
             setData(result);
             if (keyCity) setCache(keyCity, result, cacheMs);
             setLastUpdated(Date.now());
@@ -69,7 +72,7 @@ export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast
           }
         }
       } else if (paramsCity) {
-        result = await withRetry(callCity);
+        result = await dedupe(keyCity || 'city', () => withRetry(callCity));
         setData(result);
         if (keyCity) setCache(keyCity, result, cacheMs);
         setLastUpdated(Date.now());
@@ -82,13 +85,20 @@ export function useWeather({ city, coords, pollMs = WEATHER_API.pollMs, forecast
     }
   }, [paramsCoords, paramsCity, forecast, cacheMs]);
 
-  // initial + reactive fetch
   useEffect(() => {
-    // Debounce initial/reactive fetch a bit to avoid rapid spins on GPS updates
-    const id = setTimeout(() => { fetcher(); }, 300);
+    if (!paramsCoords && !paramsCity) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    const id = setTimeout(() => { fetcher(); }, 150);
     return () => {
       clearTimeout(id);
-      if (ctrlRef.current) ctrlRef.current.abort();
+      if (ctrlRef.current) {
+        ctrlRef.current.abort();
+        ctrlRef.current = null;
+      }
     };
   }, [fetcher]);
 

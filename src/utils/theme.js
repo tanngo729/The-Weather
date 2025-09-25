@@ -15,16 +15,19 @@ export function classifyWeather(desc = '', main = '', icon = '') {
 
 function isNightLocal(nowMs, sunriseSec, sunsetSec, tzSec = 0) {
   try {
-    const localNow = nowMs + tzSec * 1000;
-    const sunrise = (sunriseSec || 0) * 1000 + tzSec * 1000;
-    const sunset = (sunsetSec || 0) * 1000 + tzSec * 1000;
-    return localNow < sunrise || localNow > sunset;
+    const nowUTC = nowMs;
+    const sunriseUTC = (sunriseSec || 0) * 1000;
+    const sunsetUTC = (sunsetSec || 0) * 1000;
+    return nowUTC < sunriseUTC || nowUTC > sunsetUTC;
   } catch { return false; }
 }
 
 export function chooseBackgroundTheme(current, forecast) {
-  const tz = current?.timezone ?? 0;
-  const night = isNightLocal(Date.now(), current?.sys?.sunrise, current?.sys?.sunset, 0); // sunrise/sunset are UTC-based
+  if (!current?.weather?.[0]) {
+    return { theme: 'theme-clear', night: false };
+  }
+
+  const night = isNightLocal(Date.now(), current?.sys?.sunrise, current?.sys?.sunset, 0);
 
   const scores = { thunder: 5, rain: 4, snow: 4, fog: 3, clouds: 2, clear: 1 };
   let best = classifyWeather(current?.weather?.[0]?.description, current?.weather?.[0]?.main, current?.weather?.[0]?.icon);
@@ -37,9 +40,14 @@ export function chooseBackgroundTheme(current, forecast) {
     if ((scores[c] || 0) > bestScore) { best = c; bestScore = scores[c]; }
   }
 
-  // Map to asset names
-  if (best === 'clear') return { theme: night ? 'clear-night' : 'clear-day', night };
-  if (best === 'clouds') return { theme: night ? 'clouds-night' : 'clouds', night };
-  return { theme: best, night };
+  // Map to CSS theme classes
+  if (best === 'thunder') return { theme: 'theme-thunder', night };
+  if (best === 'rain') return { theme: 'theme-rain', night };
+  if (best === 'snow') return { theme: 'theme-snow', night };
+  if (best === 'fog') return { theme: 'theme-fog', night };
+  if (best === 'clouds') return { theme: night ? 'theme-night' : 'theme-clouds', night };
+  if (best === 'clear') return { theme: night ? 'theme-night' : 'theme-clear', night };
+
+  return { theme: 'theme-clear', night };
 }
 

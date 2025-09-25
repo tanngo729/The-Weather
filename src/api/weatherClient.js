@@ -28,12 +28,19 @@ async function http(path, params = {}, { signal } = {}) {
   if (!res.ok) {
     let detail = '';
     try { detail = await res.text(); } catch {}
-    let hint = '';
+    let message = `Lỗi kết nối API thời tiết (${res.status})`;
     if (res.status === 401) {
-      hint = ' • Kiểm tra VITE_WEATHER_API_KEY (đúng/chưa kích hoạt) và dùng /data/2.5 cho /weather, /forecast';
+      message = 'API key không hợp lệ hoặc chưa được kích hoạt';
+    } else if (res.status === 404) {
+      message = 'Không tìm thấy thông tin địa điểm';
+    } else if (res.status === 429) {
+      message = 'Vượt quá giới hạn truy vấn, vui lòng thử lại sau';
+    } else if (res.status >= 500) {
+      message = 'Máy chủ gặp sự cố, vui lòng thử lại sau';
     }
-    const err = new Error(`HTTP ${res.status}: ${res.statusText}${hint} ${detail}`.trim());
+    const err = new Error(message);
     err.status = res.status;
+    err.detail = detail;
     throw err;
   }
   return res.json();

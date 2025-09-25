@@ -2,8 +2,9 @@
 const store = new Map();
 
 export function setCache(key, value, ttlMs = 60_000) {
-  const expiresAt = Date.now() + ttlMs;
-  store.set(key, { value, expiresAt });
+  const timestamp = Date.now();
+  const expiresAt = timestamp + ttlMs;
+  store.set(key, { data: value, timestamp, expiresAt });
 }
 
 export function getCache(key) {
@@ -13,7 +14,7 @@ export function getCache(key) {
     store.delete(key);
     return undefined;
   }
-  return entry.value;
+  return entry;
 }
 
 export function delCache(key) {

@@ -6,6 +6,11 @@ import { useReverseGeocode } from './hooks/useReverseGeocode';
 import WeatherBackground from './components/WeatherBackground';
 import { useLocalClock } from './hooks/useLocalClock';
 import { chooseBackgroundTheme } from './utils/theme';
+import { useDebounce } from './hooks/useDebounce';
+import { useTransition } from './hooks/useTransition';
+import { useToast } from './hooks/useToast';
+import { filterCities } from './data/cities';
+import Toast from './components/Toast';
 
 function formatLocalTime(tsSec, tzOffsetSec) {
   if (!tsSec) return '';
@@ -47,7 +52,7 @@ function themeFor(description, code) {
   return isNight ? 'theme-night' : 'theme-clear';
 }
 
-function CurrentWeatherCard({ cityOverride }) {
+function CurrentWeatherCard({ cityOverride, onError, onSearchSuccess }) {
   const { coords, permission, useGps, setUseGps, startWatch } = useWeatherContext();
   useEffect(() => { if (useGps && permission !== 'denied') startWatch(); }, [useGps, permission, startWatch]);
   const { data, loading, error, refresh, lastUpdated, isStale } = useWeather({
@@ -56,6 +61,19 @@ function CurrentWeatherCard({ cityOverride }) {
     pollMs: WEATHER_API.pollMs,
     forecast: false,
   });
+
+  useEffect(() => {
+    if (error && cityOverride) {
+      onError?.(error.message, 'error', 2500);
+    }
+  }, [error, cityOverride, onError]);
+
+  useEffect(() => {
+    if (data && cityOverride && !error) {
+      onSearchSuccess?.();
+    }
+  }, [data, cityOverride, error, onSearchSuccess]);
+
   const showLoading = (!data && loading);
   const tz = data?.timezone ?? 0;
   const clockLocal = useLocalClock(tz, { refreshMs: 1000 });
@@ -68,7 +86,6 @@ function CurrentWeatherCard({ cityOverride }) {
           <div className="spinner" />
         </div>
       )}
-      {error && <p className="error">Lỗi: {error.message}</p>}
       {data && (
         <div className="now">
           <div className="now__temp">{Math.round(data.main?.temp)}°c</div>
@@ -223,52 +240,135 @@ function ForecastStrip({ forecast }) {
 
 function Shell() {
   const { city, setCity, coords, permission, useGps, setUseGps, startWatch } = useWeatherContext();
-  const [input, setInput] = useState(city);
+  const [input, setInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchAttempted, setSearchAttempted] = useState(false);
+  const debouncedInput = useDebounce(input, 200);
+  const suggestions = useMemo(() => filterCities(debouncedInput), [debouncedInput]);
+  const { toasts, showToast, removeToast } = useToast();
 
-  useEffect(() => setInput(city), [city]);
+  // Chỉ hiển thị city hiện tại trong placeholder, không trong input
+  useEffect(() => {
+    if (!searchAttempted && city && !input) {
+      // Không tự động điền city vào input nữa
+    }
+  }, [city, searchAttempted, input]);
 
   const submit = (e) => {
     e.preventDefault();
-    const next = input.trim() || 'Hanoi';
-    setCity(next);
-    // When user searches, prefer city mode (turn off GPS)
-    if (useGps) {
-      setUseGps(false);
+    const sanitized = input.trim().replace(/[<>\"'&]/g, '').slice(0, 100);
+    if (sanitized) {
+      setSearchAttempted(true);
+      setShowSuggestions(false);
+      if (useGps) {
+        setUseGps(false);
+      }
+      // Set city để thử tìm kiếm, input sẽ bị xóa khi thành công hoặc lỗi
+      setCity(sanitized);
     }
   };
 
+  const selectSuggestion = (suggestion) => {
+    setSearchAttempted(true);
+    setCity(suggestion);
+    setShowSuggestions(false);
+    if (useGps) {
+      setUseGps(false);
+    }
+    // Xóa input ngay khi chọn suggestion
+    setTimeout(() => {
+      setInput('');
+    }, 100);
+  };
+
   const { label: placeLabel } = useReverseGeocode(coords);
-  const { data: currentData } = useWeather({ city, coords: useGps ? coords : undefined, forecast: false, pollMs: 0, cacheMs: 30_000 });
-  const { data: forecastData } = useWeather({ city, coords: useGps ? coords : undefined, forecast: true, pollMs: 0, cacheMs: 5 * 60_000 });
+  const [currentCity, currentPending] = useTransition(city, 100);
+  const [currentCoords, coordsPending] = useTransition(useGps ? coords : undefined, 100);
+  const { data: currentData, loading: currentLoading } = useWeather({ city: currentCity, coords: currentCoords, forecast: false, pollMs: 0, cacheMs: 30_000 });
+  const { data: forecastData, loading: forecastLoading } = useWeather({ city: currentCity, coords: currentCoords, forecast: true, pollMs: 0, cacheMs: 5 * 60_000 });
+  const isChangingLocation = currentPending || coordsPending || (currentLoading && !currentData) || (forecastLoading && !forecastData);
   const bg = chooseBackgroundTheme(currentData, forecastData);
-  const theme = bg.theme; const isNight = bg.night;
-  // FX intensity toggle (low|med|high)
-  // UI simplified: fixed medium FX and bright tone by default
+  const theme = bg.theme;
+  const isNight = bg.night;
 
   return (
-    <div className={`container theme ${theme || ''} fx-med tone-bright`}>
-      <WeatherBackground theme={theme || 'clear-day'} fx={'med'} night={isNight} />
+    <div className={`container ${theme} fx-med tone-bright`}>
+      <WeatherBackground theme={theme} fx={'med'} night={isNight} />
+      {isChangingLocation && (
+        <div className="location-loading">
+          <div className="loading-content">
+            <div className="spinner"></div>
+            <span>Đang chuyển vị trí...</span>
+          </div>
+        </div>
+      )}
       <header className="topbar">
         <div className="brand"><i className="fa-solid fa-cloud-sun brand-icon"></i><span>weatherio</span></div>
-        <form onSubmit={submit} className="searchbar">
+        <form onSubmit={submit} className="searchbar" style={{ position: 'relative' }}>
           <i className="fa-solid fa-magnifying-glass s-icon" aria-hidden="true"></i>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Tìm kiếm địa điểm..." aria-label="Tìm kiếm địa điểm" />
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+            placeholder={city ? `Hiện tại: ${city} - Nhập để tìm thành phố khác...` : "Nhập tên thành phố (VD: London, Paris, Tokyo)..."}
+            aria-label="Tìm kiếm địa điểm"
+          />
           <button type="submit" className="s-btn">Tìm</button>
+          {showSuggestions && suggestions.length > 0 && (
+            <div className="suggestions">
+              {suggestions.map((suggestion, i) => (
+                <div
+                  key={suggestion}
+                  className="suggestion-item"
+                  onClick={() => selectSuggestion(suggestion)}
+                >
+                  <i className="fa-solid fa-location-dot suggestion-icon"></i>
+                  <span className="suggestion-text">{suggestion}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </form>
         <div className="top-actions">
           <button
             type="button"
             className="btn-current-loc"
-            onClick={() => { if (!useGps) { setUseGps(true); startWatch(); } }}
+            onClick={() => {
+              if (!useGps) {
+                setInput('');
+                setCity('');
+                setSearchAttempted(false);
+                setUseGps(true);
+                startWatch();
+              }
+            }}
             disabled={permission === 'denied' || useGps}
           >
-            Current Location
+            <i className="fa-solid fa-location-crosshairs" style={{ marginRight: '6px' }}></i>
+            {useGps ? 'Đang dùng GPS' : 'Vị trí hiện tại'}
           </button>
         </div>
       </header>
       <main className="layout">
         <aside className="sidebar">
-          <CurrentWeatherCard cityOverride={city} />
+          <CurrentWeatherCard
+          cityOverride={city}
+          onError={(msg, type, duration) => {
+            showToast(msg, type, duration);
+            // Nếu có lỗi và đang search, reset city về trống
+            if (searchAttempted && city) {
+              setCity('');
+              setSearchAttempted(false);
+            }
+          }}
+          onSearchSuccess={() => {
+            // Xóa input khi tìm kiếm thành công
+            if (searchAttempted) {
+              setInput('');
+            }
+          }}
+        />
         </aside>
         <section className="main">
           <Highlights current={currentData} />
@@ -276,6 +376,17 @@ function Shell() {
         </section>
       </main>
       <ForecastStrip forecast={forecastData} />
+      <div className="toast-container">
+        {toasts.map(toast => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            duration={toast.duration}
+            onClose={() => removeToast(toast.id)}
+          />
+        ))}
+      </div>
     </div>
   );
 }

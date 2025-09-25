@@ -12,7 +12,7 @@ export function useReverseGeocode(coords, { ttlMs = 10 * 60_000 } = {}) {
     if (!coords?.lat || !coords?.lon) return;
     const key = `rev:${coords.lat.toFixed(3)},${coords.lon.toFixed(3)}`;
     const cached = getCache(key);
-    if (cached) { setLabel(cached); return; }
+    if (cached?.data) { setLabel(cached.data); return; }
     if (ctrlRef.current) ctrlRef.current.abort();
     ctrlRef.current = new AbortController();
     setLoading(true); setError(null);
@@ -30,7 +30,15 @@ export function useReverseGeocode(coords, { ttlMs = 10 * 60_000 } = {}) {
     }
   }, [coords, ttlMs]);
 
-  useEffect(() => { run(); return () => ctrlRef.current?.abort(); }, [run]);
+  useEffect(() => {
+    run();
+    return () => {
+      if (ctrlRef.current) {
+        ctrlRef.current.abort();
+        ctrlRef.current = null;
+      }
+    };
+  }, [run]);
 
   return { label, loading, error, refresh: run };
 }
